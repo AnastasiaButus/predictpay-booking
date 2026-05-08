@@ -28,3 +28,12 @@ docker compose up --build
 - docs: `http://localhost:8000/docs`
 - postgres: `localhost:5432`
 - redis: `localhost:6379`
+
+## Database and migrations
+
+```bash
+docker compose up --build -d
+docker compose exec backend alembic upgrade head
+docker compose exec backend alembic current
+docker compose down
+```

@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     POSTGRES_USER: str = "predictpay"
     POSTGRES_PASSWORD: str = "predictpay"
 
-    DATABASE_URL: str = "postgresql://predictpay:predictpay@postgres:5432/predictpay"
+    DATABASE_URL: str = "postgresql+psycopg://predictpay:predictpay@postgres:5432/predictpay"
     REDIS_URL: str = "redis://redis:6379/0"
     CELERY_BROKER_URL: str = "redis://redis:6379/0"
     CELERY_RESULT_BACKEND: str = "redis://redis:6379/1"
