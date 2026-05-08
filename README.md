@@ -56,3 +56,13 @@ docker compose down
 
 Passwords are stored as hashes. Refresh tokens are stored only as SHA-256 hashes.
 Balance is not stored in JWT tokens.
+
+## Seed demo data
+
+```bash
+docker compose up -d
+docker compose exec backend alembic upgrade head
+docker compose exec backend python -m app.seed.seed_demo_data
+docker compose exec postgres psql -U predictpay -d predictpay -c "select name, version, is_active from ml_models;"
+docker compose exec postgres psql -U predictpay -d predictpay -c "select code, credits_amount, max_activations, current_activations, is_active from promocodes;"
+```
