@@ -45,3 +45,14 @@ docker compose down
 .\.venv\Scripts\python.exe -m pytest backend/tests/integration/test_health_api.py
 .\.venv\Scripts\python.exe -m pytest backend/tests/integration/test_db_schema.py
 ```
+
+## Auth API
+
+- `POST /api/v1/auth/register`
+- `POST /api/v1/auth/login`
+- `POST /api/v1/auth/refresh`
+- `POST /api/v1/auth/logout`
+- `GET /api/v1/users/me`
+
+Passwords are stored as hashes. Refresh tokens are stored only as SHA-256 hashes.
+Balance is not stored in JWT tokens.
