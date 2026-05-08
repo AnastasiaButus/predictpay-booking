@@ -66,3 +66,14 @@ docker compose exec backend python -m app.seed.seed_demo_data
 docker compose exec postgres psql -U predictpay -d predictpay -c "select name, version, is_active from ml_models;"
 docker compose exec postgres psql -U predictpay -d predictpay -c "select code, credits_amount, max_activations, current_activations, is_active from promocodes;"
 ```
+
+## Billing API
+
+- `GET /api/v1/billing/balance`
+- `POST /api/v1/billing/top-up`
+- `GET /api/v1/billing/transactions`
+
+`balance` is immediately available credit. `reserved_balance` is credit held for
+future prediction lifecycle operations. Top-up creates a completed transaction,
+and the MVP treats the payment gateway as mocked. Reserve, confirm charge, and
+refund are service-level methods for future prediction processing.
