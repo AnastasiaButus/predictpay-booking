@@ -16,3 +16,15 @@ Useful endpoints:
 
 - `GET /health`
 - `GET /docs`
+
+## Local Docker run
+
+```bash
+docker compose up --build
+```
+
+- backend: `http://localhost:8000`
+- health: `http://localhost:8000/health`
+- docs: `http://localhost:8000/docs`
+- postgres: `localhost:5432`
+- redis: `localhost:6379`
