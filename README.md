@@ -37,3 +37,11 @@ docker compose exec backend alembic upgrade head
 docker compose exec backend alembic current
 docker compose down
 ```
+
+## Testing
+
+```bash
+.\.venv\Scripts\python.exe -m pytest backend/tests
+.\.venv\Scripts\python.exe -m pytest backend/tests/integration/test_health_api.py
+.\.venv\Scripts\python.exe -m pytest backend/tests/integration/test_db_schema.py
+```
