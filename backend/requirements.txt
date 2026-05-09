@@ -17,3 +17,5 @@ scikit-learn
 joblib
 celery
 redis
+prometheus-client
+flower

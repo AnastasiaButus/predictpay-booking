@@ -5,6 +5,7 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "PredictPay BookingGuard"
     SERVICE_NAME: str = "predictpay-bookingguard"
     VERSION: str = "1.0.0"
+    ENVIRONMENT: str = "local"
 
     POSTGRES_DB: str = "predictpay"
     POSTGRES_USER: str = "predictpay"

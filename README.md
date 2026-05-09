@@ -216,3 +216,37 @@ Promocodes are shown to the user as an MVP demo showcase. In a production
 scenario, promocodes could be targeted, hidden, or distributed through external
 marketing channels instead of being listed openly in the UI. `SPRINGFIELD100`
 is a reference to Springfield and The Simpsons.
+
+## Observability / Ops
+
+Local ops URLs:
+
+- Backend docs: `http://localhost:8000/docs`
+- Metrics: `http://localhost:8000/metrics`
+- Dashboard: `http://localhost:8501`
+- Flower: `http://localhost:5555`
+
+Useful commands:
+
+```bash
+docker compose up -d
+docker compose ps
+docker compose logs backend --tail=100
+docker compose logs celery_worker --tail=100
+docker compose logs flower --tail=100
+Invoke-RestMethod http://127.0.0.1:8000/health
+Invoke-RestMethod http://127.0.0.1:8000/metrics
+```
+
+Backend logs are structured JSON logs written to stdout. HTTP request logs include
+method, path template, status code, duration, client host, and `request_id`.
+If a request includes `X-Request-ID`, the backend preserves it; otherwise it
+generates one and returns it in response headers. Request bodies, passwords,
+JWTs, refresh tokens, and Authorization headers are intentionally not logged.
+
+`/metrics` exposes Prometheus-compatible text metrics for HTTP requests,
+request duration, queued prediction submissions, and application info. Celery
+worker monitoring is handled by Flower at `http://localhost:5555`.
+
+Security note: Flower runs without authentication in this MVP and is intended
+for local/demo mode only.

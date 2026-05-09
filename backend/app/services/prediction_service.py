@@ -11,6 +11,7 @@ from app.core.exceptions import (
     PredictionEnqueueError,
     PredictionNotFoundError,
 )
+from app.core.metrics import record_prediction_submitted
 from app.models.prediction import Prediction
 from app.models.user import User
 from app.repositories.billing_repository import BillingRepository
@@ -70,6 +71,11 @@ class PredictionService:
                 celery_task_id=async_result.id,
             )
             self.db.commit()
+            record_prediction_submitted(
+                queue_name=queue,
+                plan=user.plan,
+                status="queued",
+            )
             self.db.refresh(prediction)
             return prediction
         except Exception as exc:
