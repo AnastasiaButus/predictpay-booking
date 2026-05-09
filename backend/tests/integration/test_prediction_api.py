@@ -183,6 +183,45 @@ def test_create_prediction_decreases_balance_by_10_and_reserved_increases(
     assert balance_response.json() == {"balance": 90, "reserved_balance": 10}
 
 
+def test_free_active_prediction_limit_returns_409_without_extra_reserve(
+    prediction_client: TestClient,
+) -> None:
+    _, tokens = register_and_login(prediction_client)
+    headers = auth_headers(tokens)
+
+    for _ in range(3):
+        response = prediction_client.post(
+            "/api/v1/predictions",
+            json={"features": valid_features()},
+            headers=headers,
+        )
+        assert response.status_code == 200
+
+    balance_before = prediction_client.get(
+        "/api/v1/billing/balance",
+        headers=headers,
+    ).json()
+    response = prediction_client.post(
+        "/api/v1/predictions",
+        json={"features": valid_features()},
+        headers=headers,
+    )
+    balance_after = prediction_client.get(
+        "/api/v1/billing/balance",
+        headers=headers,
+    ).json()
+    history = prediction_client.get(
+        "/api/v1/predictions/history",
+        headers=headers,
+    ).json()
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Active prediction limit reached: 3"
+    assert balance_before == {"balance": 70, "reserved_balance": 30}
+    assert balance_after == balance_before
+    assert len(history["items"]) == 3
+
+
 def test_get_prediction_pending(prediction_client: TestClient) -> None:
     _, tokens = register_and_login(prediction_client)
     create_response = prediction_client.post(

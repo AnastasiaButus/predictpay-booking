@@ -127,11 +127,16 @@ def create_model_metadata(db: Session) -> MLModel:
     return model
 
 
-def create_pending_prediction(db: Session, user: User, model: MLModel) -> Prediction:
+def create_prediction_with_status(
+    db: Session,
+    user: User,
+    model: MLModel,
+    status: str,
+) -> Prediction:
     prediction = Prediction(
         user_id=user.id,
         model_id=model.id,
-        status="pending",
+        status=status,
         input_data=valid_features(),
         cost=10,
     )
@@ -139,6 +144,10 @@ def create_pending_prediction(db: Session, user: User, model: MLModel) -> Predic
     db.commit()
     db.refresh(prediction)
     return prediction
+
+
+def create_pending_prediction(db: Session, user: User, model: MLModel) -> Prediction:
+    return create_prediction_with_status(db, user, model, "pending")
 
 
 def transactions_for_prediction(db: Session, prediction_id: int) -> list[Transaction]:
@@ -249,12 +258,22 @@ def test_free_active_prediction_limit(db: Session) -> None:
     model = create_model_metadata(db)
     for _ in range(3):
         create_pending_prediction(db, user, model)
+    sender = CapturingTaskSender()
 
     with pytest.raises(ActivePredictionLimitError):
-        PredictionService(db, task_sender=CapturingTaskSender()).create_prediction_async(
+        PredictionService(db, task_sender=sender).create_prediction_async(
             user.id,
             valid_features(),
         )
+
+    db.refresh(user)
+    predictions = list(db.scalars(select(Prediction).where(Prediction.user_id == user.id)))
+    transactions = list(db.scalars(select(Transaction).where(Transaction.user_id == user.id)))
+    assert len(predictions) == 3
+    assert transactions == []
+    assert user.balance == 100
+    assert user.reserved_balance == 0
+    assert sender.calls == []
 
 
 def test_pro_active_prediction_limit(db: Session) -> None:
@@ -272,6 +291,22 @@ def test_pro_active_prediction_limit(db: Session) -> None:
             user.id,
             valid_features(),
         )
+
+
+def test_completed_and_failed_predictions_do_not_count_toward_active_limit(
+    db: Session,
+) -> None:
+    user = create_user(db, plan="free")
+    model = create_model_metadata(db)
+    for status in ("completed", "failed", "completed"):
+        create_prediction_with_status(db, user, model, status)
+
+    prediction = PredictionService(
+        db,
+        task_sender=CapturingTaskSender(),
+    ).create_prediction_async(user.id, valid_features())
+
+    assert prediction.status == "pending"
 
 
 def test_queue_selection_free_default(db: Session) -> None:

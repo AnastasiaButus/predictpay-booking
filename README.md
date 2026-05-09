@@ -2,7 +2,23 @@
 
 Educational production-like ML service for predicting hotel booking cancellation risk.
 
-Current step: project skeleton, minimal FastAPI backend health endpoint, and configuration skeleton.
+Current step: final hardening MVP with FastAPI, PostgreSQL, JWT auth, credit
+billing, Celery/Redis async inference, Streamlit dashboard, Flower, `/metrics`,
+and acceptance documentation.
+
+## Final docs
+
+- [Demo script](docs/DEMO_SCRIPT.md)
+- [Architecture](docs/ARCHITECTURE.md)
+
+## Final demo checklist
+
+1. Start the stack, migrate DB, seed demo data, and train the local model.
+2. Open Streamlit, register/log in, show account and balance.
+3. Top up, activate `WELCOME100`, and show the secret challenge.
+4. Submit a prediction and poll it until `completed`.
+5. Show transaction history with reserve and charge records.
+6. Open Flower, `/metrics`, and backend JSON logs.
 
 ## Backend
 
@@ -20,12 +36,19 @@ Useful endpoints:
 ## Local Docker run
 
 ```bash
-docker compose up --build
+docker compose build --pull=false
+docker compose up -d
+docker compose exec backend alembic upgrade head
+docker compose exec backend python -m app.seed.seed_demo_data
+docker compose exec backend python -m app.ml.train_model
 ```
 
 - backend: `http://localhost:8000`
 - health: `http://localhost:8000/health`
 - docs: `http://localhost:8000/docs`
+- dashboard: `http://localhost:8501`
+- flower: `http://localhost:5555`
+- metrics: `http://localhost:8000/metrics`
 - postgres: `localhost:5432`
 - redis: `localhost:6379`
 
@@ -42,8 +65,8 @@ docker compose down
 
 ```bash
 .\.venv\Scripts\python.exe -m pytest backend/tests
-.\.venv\Scripts\python.exe -m pytest backend/tests/integration/test_health_api.py
-.\.venv\Scripts\python.exe -m pytest backend/tests/integration/test_db_schema.py
+.\.venv\Scripts\python.exe -m pytest dashboard/tests
+.\.venv\Scripts\python.exe -m compileall backend/app backend/tests dashboard
 ```
 
 ## Auth API
@@ -157,6 +180,12 @@ Prediction cost is 10 credits. In Task 13 inference runs asynchronously through
 Celery. `POST /api/v1/predictions` creates the DB record, reserves credits, and
 returns `pending` quickly. Use `GET /api/v1/predictions/{id}` or
 `GET /api/v1/predictions/history` to poll DB status.
+
+Active prediction limits are enforced before the prediction row is created and
+before credits are reserved. Active statuses are `pending` and `processing`.
+Free users can have up to 3 active predictions; pro users and admins can have up
+to 10. When the limit is reached, the API returns `409 Conflict` and leaves
+balance/reserved credits unchanged.
 
 Before using the Prediction API:
 
