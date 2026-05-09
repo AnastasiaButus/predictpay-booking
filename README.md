@@ -177,3 +177,34 @@ Billing lifecycle:
 Queue selection is plan-aware: free users go to `default`; pro users and admins
 go to `priority`. Redis is used only as Celery broker/result backend; PostgreSQL
 remains the source of truth for balances and prediction state.
+
+## Dashboard
+
+The Streamlit dashboard is a Russian-language MVP interface for project demo and
+defense. It is a separate REST API client: it does not connect to PostgreSQL,
+does not call Celery directly, and does not import backend services,
+repositories, or the Predictor.
+
+Run:
+
+```bash
+docker compose up -d
+docker compose exec backend alembic upgrade head
+docker compose exec backend python -m app.seed.seed_demo_data
+docker compose exec backend python -m app.ml.train_model
+```
+
+Open `http://localhost:8501`.
+
+Demo flow:
+
+1. Register or log in.
+2. Check account and balance.
+3. Use mock top-up or activate a promocode.
+4. Submit a prediction.
+5. Poll prediction status.
+6. Review prediction history and transactions.
+
+Promocodes are shown to the user as an MVP demo showcase. In a production
+scenario, promocodes could be targeted, hidden, or distributed through external
+marketing channels instead of being listed openly in the UI.

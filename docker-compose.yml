@@ -48,6 +48,16 @@ services:
       redis:
         condition: service_healthy
 
+  dashboard:
+    build: ./dashboard
+    environment:
+      BACKEND_API_URL: http://backend:8000
+    ports:
+      - "8501:8501"
+    depends_on:
+      backend:
+        condition: service_healthy
+
   postgres:
     image: postgres:16-alpine
     environment:
