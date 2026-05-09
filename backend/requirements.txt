@@ -15,3 +15,5 @@ pandas
 numpy
 scikit-learn
 joblib
+celery
+redis

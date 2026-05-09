@@ -5,6 +5,8 @@ services:
       - .env.example
     ports:
       - "8000:8000"
+    volumes:
+      - model_storage:/app/storage
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
     depends_on:
       postgres:
@@ -23,6 +25,28 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+
+  celery_worker:
+    build: ./backend
+    env_file:
+      - .env.example
+    command:
+      [
+        "celery",
+        "-A",
+        "app.workers.celery_app.celery_app",
+        "worker",
+        "--loglevel=INFO",
+        "-Q",
+        "default,priority",
+      ]
+    volumes:
+      - model_storage:/app/storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
   postgres:
     image: postgres:16-alpine
@@ -52,3 +76,4 @@ services:
 
 volumes:
   postgres_data:
+  model_storage:

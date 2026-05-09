@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     BACKEND_CORS_ORIGINS: str = "http://localhost:8501"
 
     PREDICTION_COST: int = 10
+    PREDICTION_COST_CREDITS: int = 10
+    FREE_ACTIVE_PREDICTION_LIMIT: int = 3
+    PRO_ACTIVE_PREDICTION_LIMIT: int = 10
     START_BALANCE: int = 100
     MODEL_PATH: str = "storage/models/hotel_cancellation_model.joblib"
 

@@ -16,7 +16,6 @@ from app.api.deps import get_db
 from app.db.base_class import Base
 from app.ml.features import FEATURE_COLUMNS
 from app.models.ml_model import MLModel
-from app.models.transaction import Transaction
 from app.models.user import User
 from app.services.prediction_service import PredictionService
 
@@ -26,24 +25,17 @@ def compile_jsonb_sqlite(type_, compiler, **kw) -> str:
     return "JSON"
 
 
-class FakePredictor:
-    def __init__(self, model_path: str) -> None:
-        self.model_path = model_path
-
-    def predict_one(self, features: dict) -> dict:
-        return {
-            "prediction": 1,
-            "cancellation_probability": 0.82,
-            "risk_label": "high",
-            "model_name": "hotel_cancellation_model",
-            "model_version": "1.0.0",
-            "features_used": FEATURE_COLUMNS,
-        }
+class FakeAsyncResult:
+    def __init__(self, task_id: str) -> None:
+        self.id = task_id
 
 
 class FakePredictionService(PredictionService):
     def __init__(self, db: Session) -> None:
-        super().__init__(db, predictor_factory=FakePredictor)
+        super().__init__(db, task_sender=self._fake_send)
+
+    def _fake_send(self, prediction_id: int, queue: str) -> FakeAsyncResult:
+        return FakeAsyncResult(f"fake-{prediction_id}-{queue}")
 
 
 @pytest.fixture
@@ -144,18 +136,6 @@ def set_user_balance(client: TestClient, email: str, balance: int) -> None:
         db.commit()
 
 
-def transactions_for_latest_prediction(client: TestClient) -> list[Transaction]:
-    session_local = client.testing_session_local
-    with session_local() as db:
-        return list(
-            db.scalars(
-                select(Transaction)
-                .where(Transaction.prediction_id.is_not(None))
-                .order_by(Transaction.id)
-            )
-        )
-
-
 def test_create_prediction_requires_auth(prediction_client: TestClient) -> None:
     response = prediction_client.post(
         "/api/v1/predictions",
@@ -165,7 +145,7 @@ def test_create_prediction_requires_auth(prediction_client: TestClient) -> None:
     assert response.status_code == 401
 
 
-def test_create_prediction_success(prediction_client: TestClient) -> None:
+def test_create_prediction_returns_pending(prediction_client: TestClient) -> None:
     _, tokens = register_and_login(prediction_client)
 
     response = prediction_client.post(
@@ -176,14 +156,15 @@ def test_create_prediction_success(prediction_client: TestClient) -> None:
 
     assert response.status_code == 200
     body = response.json()
-    assert body["status"] == "completed"
-    assert body["prediction"] == 1
-    assert body["cancellation_probability"] == 0.82
-    assert body["risk_label"] == "high"
+    assert body["status"] == "pending"
+    assert body["prediction"] is None
+    assert body["cancellation_probability"] is None
+    assert body["risk_label"] is None
     assert body["cost_credits"] == 10
+    assert body["celery_task_id"].startswith("fake-")
 
 
-def test_create_prediction_decreases_balance_by_10(
+def test_create_prediction_decreases_balance_by_10_and_reserved_increases(
     prediction_client: TestClient,
 ) -> None:
     _, tokens = register_and_login(prediction_client)
@@ -199,93 +180,10 @@ def test_create_prediction_decreases_balance_by_10(
         headers=auth_headers(tokens),
     )
 
-    assert balance_response.json() == {"balance": 90, "reserved_balance": 0}
+    assert balance_response.json() == {"balance": 90, "reserved_balance": 10}
 
 
-def test_create_prediction_creates_reserve_and_charge_transactions(
-    prediction_client: TestClient,
-) -> None:
-    _, tokens = register_and_login(prediction_client)
-
-    response = prediction_client.post(
-        "/api/v1/predictions",
-        json={"features": valid_features()},
-        headers=auth_headers(tokens),
-    )
-    assert response.status_code == 200
-
-    transactions = transactions_for_latest_prediction(prediction_client)
-    assert [transaction.transaction_type for transaction in transactions] == [
-        "prediction_reserve",
-        "prediction_charge",
-    ]
-    assert [transaction.amount for transaction in transactions] == [-10, 0]
-
-
-def test_create_prediction_insufficient_credits_returns_402(
-    prediction_client: TestClient,
-) -> None:
-    payload, tokens = register_and_login(prediction_client)
-    set_user_balance(prediction_client, payload["email"], balance=5)
-
-    response = prediction_client.post(
-        "/api/v1/predictions",
-        json={"features": valid_features()},
-        headers=auth_headers(tokens),
-    )
-
-    assert response.status_code == 402
-
-
-def test_create_prediction_invalid_payload_returns_422(
-    prediction_client: TestClient,
-) -> None:
-    _, tokens = register_and_login(prediction_client)
-    features = valid_features()
-    features["adr"] = -1
-
-    response = prediction_client.post(
-        "/api/v1/predictions",
-        json={"features": features},
-        headers=auth_headers(tokens),
-    )
-
-    assert response.status_code == 422
-
-
-def test_create_prediction_rejects_extra_fields(
-    prediction_client: TestClient,
-) -> None:
-    _, tokens = register_and_login(prediction_client)
-    features = valid_features()
-    features["unexpected"] = "value"
-
-    response = prediction_client.post(
-        "/api/v1/predictions",
-        json={"features": features},
-        headers=auth_headers(tokens),
-    )
-
-    assert response.status_code == 422
-
-
-def test_create_prediction_rejects_leakage_fields(
-    prediction_client: TestClient,
-) -> None:
-    _, tokens = register_and_login(prediction_client)
-    features = valid_features()
-    features["reservation_status"] = "Check-Out"
-
-    response = prediction_client.post(
-        "/api/v1/predictions",
-        json={"features": features},
-        headers=auth_headers(tokens),
-    )
-
-    assert response.status_code == 422
-
-
-def test_get_prediction_success(prediction_client: TestClient) -> None:
+def test_get_prediction_pending(prediction_client: TestClient) -> None:
     _, tokens = register_and_login(prediction_client)
     create_response = prediction_client.post(
         "/api/v1/predictions",
@@ -300,30 +198,10 @@ def test_get_prediction_success(prediction_client: TestClient) -> None:
     )
 
     assert response.status_code == 200
-    assert response.json()["id"] == prediction_id
+    assert response.json()["status"] == "pending"
 
 
-def test_get_prediction_not_found_for_other_user(
-    prediction_client: TestClient,
-) -> None:
-    _, first_tokens = register_and_login(prediction_client)
-    _, second_tokens = register_and_login(prediction_client)
-    create_response = prediction_client.post(
-        "/api/v1/predictions",
-        json={"features": valid_features()},
-        headers=auth_headers(first_tokens),
-    )
-    prediction_id = create_response.json()["id"]
-
-    response = prediction_client.get(
-        f"/api/v1/predictions/{prediction_id}",
-        headers=auth_headers(second_tokens),
-    )
-
-    assert response.status_code == 404
-
-
-def test_prediction_history_success(prediction_client: TestClient) -> None:
+def test_history_shows_prediction(prediction_client: TestClient) -> None:
     _, tokens = register_and_login(prediction_client)
     create_response = prediction_client.post(
         "/api/v1/predictions",
@@ -341,3 +219,76 @@ def test_prediction_history_success(prediction_client: TestClient) -> None:
     assert body["limit"] == 50
     assert body["offset"] == 0
     assert [item["id"] for item in body["items"]] == [create_response.json()["id"]]
+
+
+def test_invalid_payload_returns_422(prediction_client: TestClient) -> None:
+    _, tokens = register_and_login(prediction_client)
+    features = valid_features()
+    features["adr"] = -1
+
+    response = prediction_client.post(
+        "/api/v1/predictions",
+        json={"features": features},
+        headers=auth_headers(tokens),
+    )
+
+    assert response.status_code == 422
+
+
+def test_extra_fields_rejected(prediction_client: TestClient) -> None:
+    _, tokens = register_and_login(prediction_client)
+    features = valid_features()
+    features["unexpected"] = "value"
+
+    response = prediction_client.post(
+        "/api/v1/predictions",
+        json={"features": features},
+        headers=auth_headers(tokens),
+    )
+
+    assert response.status_code == 422
+
+
+def test_leakage_fields_rejected(prediction_client: TestClient) -> None:
+    _, tokens = register_and_login(prediction_client)
+    features = valid_features()
+    features["reservation_status"] = "Check-Out"
+
+    response = prediction_client.post(
+        "/api/v1/predictions",
+        json={"features": features},
+        headers=auth_headers(tokens),
+    )
+
+    assert response.status_code == 422
+
+
+def test_insufficient_credits_returns_402(prediction_client: TestClient) -> None:
+    payload, tokens = register_and_login(prediction_client)
+    set_user_balance(prediction_client, payload["email"], balance=5)
+
+    response = prediction_client.post(
+        "/api/v1/predictions",
+        json={"features": valid_features()},
+        headers=auth_headers(tokens),
+    )
+
+    assert response.status_code == 402
+
+
+def test_owner_only_detail(prediction_client: TestClient) -> None:
+    _, first_tokens = register_and_login(prediction_client)
+    _, second_tokens = register_and_login(prediction_client)
+    create_response = prediction_client.post(
+        "/api/v1/predictions",
+        json={"features": valid_features()},
+        headers=auth_headers(first_tokens),
+    )
+    prediction_id = create_response.json()["id"]
+
+    response = prediction_client.get(
+        f"/api/v1/predictions/{prediction_id}",
+        headers=auth_headers(second_tokens),
+    )
+
+    assert response.status_code == 404

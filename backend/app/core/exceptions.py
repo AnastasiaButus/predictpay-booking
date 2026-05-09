@@ -52,3 +52,11 @@ class ModelMetadataNotFoundError(Exception):
 
 class PredictionNotFoundError(Exception):
     pass
+
+
+class PredictionEnqueueError(Exception):
+    pass
+
+
+class ActivePredictionLimitError(Exception):
+    pass

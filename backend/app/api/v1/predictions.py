@@ -3,12 +3,14 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, get_db
 from app.core.exceptions import (
+    ActivePredictionLimitError,
     BillingConsistencyError,
     InsufficientCreditsError,
     InvalidFeaturePayloadError,
     ModelLoadError,
     ModelMetadataNotFoundError,
     ModelNotFoundError,
+    PredictionEnqueueError,
     PredictionNotFoundError,
 )
 from app.models.user import User
@@ -31,7 +33,7 @@ def create_prediction(
 ) -> dict:
     return _call_prediction_service(
         lambda: prediction_to_response(
-            PredictionService(db).create_prediction_sync(
+            PredictionService(db).create_prediction_async(
                 current_user.id,
                 payload.features.model_dump(),
             )
@@ -79,9 +81,19 @@ def _call_prediction_service(operation):
             status_code=status.HTTP_402_PAYMENT_REQUIRED,
             detail=str(exc),
         ) from exc
+    except ActivePredictionLimitError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
     except PredictionNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    except PredictionEnqueueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=str(exc),
         ) from exc
     except ModelMetadataNotFoundError as exc:

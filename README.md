@@ -153,10 +153,10 @@ will use this Predictor.
 - `GET /api/v1/predictions/{id}`
 - `GET /api/v1/predictions/history`
 
-Prediction cost is 10 credits. In Task 12 inference is synchronous: the API
-creates the DB record, reserves credits, runs `HotelCancellationPredictor`, then
-confirms charge on success or refunds on failure. Celery async queue execution
-is a future task.
+Prediction cost is 10 credits. In Task 13 inference runs asynchronously through
+Celery. `POST /api/v1/predictions` creates the DB record, reserves credits, and
+returns `pending` quickly. Use `GET /api/v1/predictions/{id}` or
+`GET /api/v1/predictions/history` to poll DB status.
 
 Before using the Prediction API:
 
@@ -165,9 +165,15 @@ docker compose up -d
 docker compose exec backend alembic upgrade head
 docker compose exec backend python -m app.seed.seed_demo_data
 docker compose exec backend python -m app.ml.train_model
+docker compose logs celery_worker --tail=100
 ```
 
-Reserve moves 10 credits from `balance` to `reserved_balance`. Charge confirms
-the reserved credits with a zero-amount `prediction_charge` transaction because
-the balance was already reduced during reserve. Refund returns reserved credits
-to `balance` if inference fails.
+Billing lifecycle:
+
+- submit reserves 10 credits from `balance` into `reserved_balance`;
+- worker success confirms charge with a zero-amount `prediction_charge`;
+- worker failure refunds reserved credits back to `balance`.
+
+Queue selection is plan-aware: free users go to `default`; pro users and admins
+go to `priority`. Redis is used only as Celery broker/result backend; PostgreSQL
+remains the source of truth for balances and prediction state.

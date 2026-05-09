@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.prediction import Prediction
@@ -49,6 +49,18 @@ class PredictionRepository:
         self.db.flush()
         return prediction
 
+    def update_task_enqueued(
+        self,
+        prediction: Prediction,
+        celery_task_id: str,
+    ) -> Prediction:
+        prediction.celery_task_id = celery_task_id
+        self.db.flush()
+        return prediction
+
+    def update_running(self, prediction: Prediction) -> Prediction:
+        return self.update_started(prediction)
+
     def update_completed(
         self,
         prediction: Prediction,
@@ -90,4 +102,17 @@ class PredictionRepository:
                 .limit(limit)
                 .offset(offset)
             )
+        )
+
+    def count_active_by_user(self, user_id: int) -> int:
+        return int(
+            self.db.scalar(
+                select(func.count())
+                .select_from(Prediction)
+                .where(
+                    Prediction.user_id == user_id,
+                    Prediction.status.in_(("pending", "processing")),
+                )
+            )
+            or 0
         )

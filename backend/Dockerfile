@@ -14,6 +14,7 @@ COPY alembic.ini ./alembic.ini
 COPY entrypoint.sh ./entrypoint.sh
 
 RUN chmod +x ./entrypoint.sh \
+    && mkdir -p /app/storage \
     && useradd --create-home --shell /usr/sbin/nologin appuser \
     && chown -R appuser:appuser /app
 

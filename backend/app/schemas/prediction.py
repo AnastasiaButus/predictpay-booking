@@ -34,6 +34,7 @@ class PredictionResponse(BaseModel):
     model_name: str | None
     model_version: str | None
     error_message: str | None
+    celery_task_id: str | None
     created_at: datetime
     completed_at: datetime | None
 

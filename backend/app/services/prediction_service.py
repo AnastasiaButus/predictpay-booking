@@ -1,37 +1,48 @@
 from collections.abc import Callable
-from time import perf_counter
 from typing import Any
 
+from celery.result import AsyncResult
 from sqlalchemy.orm import Session
 
-from app.core.exceptions import ModelMetadataNotFoundError, PredictionNotFoundError
-from app.ml.predictor import HotelCancellationPredictor
+from app.core.config import settings
+from app.core.exceptions import (
+    ActivePredictionLimitError,
+    ModelMetadataNotFoundError,
+    PredictionEnqueueError,
+    PredictionNotFoundError,
+)
 from app.models.prediction import Prediction
+from app.models.user import User
+from app.repositories.billing_repository import BillingRepository
 from app.repositories.ml_model_repository import MLModelRepository
 from app.repositories.prediction_repository import PredictionRepository
 from app.services.billing_service import BillingService
-
-
-PREDICTION_COST_CREDITS = 10
 
 
 class PredictionService:
     def __init__(
         self,
         db: Session,
-        predictor_factory: Callable[[str], Any] = HotelCancellationPredictor,
+        task_sender: Callable[[int, str], AsyncResult] | None = None,
     ) -> None:
         self.db = db
         self.predictions = PredictionRepository(db)
         self.models = MLModelRepository(db)
         self.billing = BillingService(db)
-        self.predictor_factory = predictor_factory
+        self.billing_repository = BillingRepository(db)
+        self.task_sender = task_sender or self._send_prediction_task
 
-    def create_prediction_sync(
+    def create_prediction_async(
         self,
         user_id: int,
         features: dict,
     ) -> Prediction:
+        user = self.billing_repository.get_user(user_id)
+        if user is None:
+            raise PredictionNotFoundError("User not found")
+
+        self._ensure_active_prediction_limit(user)
+
         model_metadata = self.models.get_active_default_model()
         if model_metadata is None:
             raise ModelMetadataNotFoundError(
@@ -39,46 +50,39 @@ class PredictionService:
             )
 
         prediction = self.predictions.create_prediction(
-            user_id=user_id,
+            user_id=user.id,
             model_id=model_metadata.id,
             features=features,
-            cost_credits=PREDICTION_COST_CREDITS,
+            cost_credits=settings.PREDICTION_COST_CREDITS,
         )
 
         self.billing.reserve_prediction_credits(
-            user_id=user_id,
+            user_id=user.id,
             prediction_id=prediction.id,
-            amount=PREDICTION_COST_CREDITS,
+            amount=settings.PREDICTION_COST_CREDITS,
         )
 
-        started_at = perf_counter()
+        queue = self._queue_for_user(user)
         try:
-            self.predictions.update_started(prediction)
-            predictor = self.predictor_factory(model_metadata.file_path)
-            result = predictor.predict_one(features)
-        except Exception as exc:
-            duration_ms = self._duration_ms(started_at)
-            self.predictions.update_failed(prediction, str(exc), duration_ms=duration_ms)
-            self.billing.refund_prediction_credits(
-                user_id=user_id,
-                prediction_id=prediction.id,
-                amount=PREDICTION_COST_CREDITS,
+            async_result = self.task_sender(prediction.id, queue)
+            self.predictions.update_task_enqueued(
+                prediction,
+                celery_task_id=async_result.id,
             )
-            raise
-
-        duration_ms = self._duration_ms(started_at)
-        self.predictions.update_completed(
-            prediction,
-            result_payload=result,
-            duration_ms=duration_ms,
-        )
-        self.billing.confirm_prediction_charge(
-            user_id=user_id,
-            prediction_id=prediction.id,
-            amount=PREDICTION_COST_CREDITS,
-        )
-        self.db.refresh(prediction)
-        return prediction
+            self.db.commit()
+            self.db.refresh(prediction)
+            return prediction
+        except Exception as exc:
+            self.predictions.update_failed(
+                prediction,
+                "Failed to enqueue prediction task",
+            )
+            self.billing.refund_prediction_credits(
+                user_id=user.id,
+                prediction_id=prediction.id,
+                amount=settings.PREDICTION_COST_CREDITS,
+            )
+            raise PredictionEnqueueError("Failed to enqueue prediction task") from exc
 
     def get_prediction(self, user_id: int, prediction_id: int) -> Prediction:
         prediction = self.predictions.get_by_id_for_user(
@@ -97,8 +101,28 @@ class PredictionService:
     ) -> list[Prediction]:
         return self.predictions.list_by_user(user_id=user_id, limit=limit, offset=offset)
 
-    def _duration_ms(self, started_at: float) -> int:
-        return max(0, int((perf_counter() - started_at) * 1000))
+    def _ensure_active_prediction_limit(self, user: User) -> None:
+        active_count = self.predictions.count_active_by_user(user.id)
+        limit = self._active_prediction_limit(user)
+        if active_count >= limit:
+            raise ActivePredictionLimitError(
+                f"Active prediction limit reached: {limit}"
+            )
+
+    def _active_prediction_limit(self, user: User) -> int:
+        if user.role == "admin" or user.plan == "pro":
+            return settings.PRO_ACTIVE_PREDICTION_LIMIT
+        return settings.FREE_ACTIVE_PREDICTION_LIMIT
+
+    def _queue_for_user(self, user: User) -> str:
+        if user.role == "admin" or user.plan == "pro":
+            return "priority"
+        return "default"
+
+    def _send_prediction_task(self, prediction_id: int, queue: str) -> AsyncResult:
+        from app.workers.prediction_tasks import process_prediction_task
+
+        return process_prediction_task.apply_async(args=[prediction_id], queue=queue)
 
 
 def prediction_to_response(prediction: Prediction) -> dict[str, Any]:
@@ -113,6 +137,7 @@ def prediction_to_response(prediction: Prediction) -> dict[str, Any]:
         "model_name": result.get("model_name"),
         "model_version": result.get("model_version"),
         "error_message": prediction.error_message,
+        "celery_task_id": prediction.celery_task_id,
         "created_at": prediction.created_at,
         "completed_at": prediction.completed_at,
     }

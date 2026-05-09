@@ -10,10 +10,9 @@ from sqlalchemy.pool import StaticPool
 
 import app.models  # noqa: F401
 from app.core.exceptions import (
+    ActivePredictionLimitError,
     InsufficientCreditsError,
-    InvalidFeaturePayloadError,
-    ModelNotFoundError,
-    PredictionNotFoundError,
+    PredictionEnqueueError,
 )
 from app.db.base_class import Base
 from app.ml.features import FEATURE_COLUMNS
@@ -21,10 +20,7 @@ from app.models.ml_model import MLModel
 from app.models.prediction import Prediction
 from app.models.transaction import Transaction
 from app.models.user import User
-from app.services.prediction_service import (
-    PREDICTION_COST_CREDITS,
-    PredictionService,
-)
+from app.services.prediction_service import PredictionService
 
 
 @compiles(JSONB, "sqlite")
@@ -32,32 +28,23 @@ def compile_jsonb_sqlite(type_, compiler, **kw) -> str:
     return "JSON"
 
 
-class FakePredictor:
-    def __init__(self, model_path: str) -> None:
-        self.model_path = model_path
-
-    def predict_one(self, features: dict) -> dict:
-        return {
-            "prediction": 1,
-            "cancellation_probability": 0.82,
-            "risk_label": "high",
-            "model_name": "hotel_cancellation_model",
-            "model_version": "1.0.0",
-            "features_used": FEATURE_COLUMNS,
-        }
+class FakeAsyncResult:
+    def __init__(self, task_id: str = "fake-task-id") -> None:
+        self.id = task_id
 
 
-class MissingModelPredictor:
-    def __init__(self, model_path: str) -> None:
-        raise ModelNotFoundError("Model artifact not found")
+class CapturingTaskSender:
+    def __init__(self) -> None:
+        self.calls: list[tuple[int, str]] = []
+
+    def __call__(self, prediction_id: int, queue: str) -> FakeAsyncResult:
+        self.calls.append((prediction_id, queue))
+        return FakeAsyncResult(f"task-{prediction_id}-{queue}")
 
 
-class FailingPredictor:
-    def __init__(self, model_path: str) -> None:
-        self.model_path = model_path
-
-    def predict_one(self, features: dict) -> dict:
-        raise InvalidFeaturePayloadError("Invalid features")
+class FailingTaskSender:
+    def __call__(self, prediction_id: int, queue: str) -> FakeAsyncResult:
+        raise RuntimeError("Redis unavailable")
 
 
 @pytest.fixture
@@ -98,10 +85,17 @@ def valid_features() -> dict:
     }
 
 
-def create_user(db: Session, balance: int = 100) -> User:
+def create_user(
+    db: Session,
+    balance: int = 100,
+    role: str = "user",
+    plan: str = "free",
+) -> User:
     user = User(
         email=f"prediction-{uuid4().hex}@example.com",
         hashed_password="hashed",
+        role=role,
+        plan=plan,
         balance=balance,
         reserved_balance=0,
     )
@@ -133,6 +127,20 @@ def create_model_metadata(db: Session) -> MLModel:
     return model
 
 
+def create_pending_prediction(db: Session, user: User, model: MLModel) -> Prediction:
+    prediction = Prediction(
+        user_id=user.id,
+        model_id=model.id,
+        status="pending",
+        input_data=valid_features(),
+        cost=10,
+    )
+    db.add(prediction)
+    db.commit()
+    db.refresh(prediction)
+    return prediction
+
+
 def transactions_for_prediction(db: Session, prediction_id: int) -> list[Transaction]:
     return list(
         db.scalars(
@@ -143,70 +151,86 @@ def transactions_for_prediction(db: Session, prediction_id: int) -> list[Transac
     )
 
 
-def test_create_prediction_success_creates_record(db: Session) -> None:
+def test_create_prediction_async_creates_pending_record(db: Session) -> None:
     user = create_user(db)
     create_model_metadata(db)
 
-    prediction = PredictionService(db, predictor_factory=FakePredictor).create_prediction_sync(
-        user.id,
-        valid_features(),
-    )
+    prediction = PredictionService(
+        db,
+        task_sender=CapturingTaskSender(),
+    ).create_prediction_async(user.id, valid_features())
 
-    assert prediction.id is not None
-    assert prediction.status == "completed"
+    assert prediction.status == "pending"
+    assert prediction.result is None
+    assert prediction.celery_task_id.startswith("task-")
 
 
-def test_create_prediction_success_reserves_and_charges_credits(db: Session) -> None:
+def test_create_prediction_async_reserves_credits(db: Session) -> None:
     user = create_user(db, balance=100)
     create_model_metadata(db)
 
-    prediction = PredictionService(db, predictor_factory=FakePredictor).create_prediction_sync(
-        user.id,
-        valid_features(),
-    )
+    prediction = PredictionService(
+        db,
+        task_sender=CapturingTaskSender(),
+    ).create_prediction_async(user.id, valid_features())
     db.refresh(user)
 
     assert user.balance == 90
-    assert user.reserved_balance == 0
-    transaction_types = [
-        transaction.transaction_type
-        for transaction in transactions_for_prediction(db, prediction.id)
-    ]
-    assert transaction_types == ["prediction_reserve", "prediction_charge"]
+    assert user.reserved_balance == 10
+    transaction = transactions_for_prediction(db, prediction.id)[0]
+    assert transaction.transaction_type == "prediction_reserve"
+    assert transaction.amount == -10
 
 
-def test_create_prediction_success_stores_result(db: Session) -> None:
+def test_create_prediction_async_enqueues_task(db: Session) -> None:
     user = create_user(db)
     create_model_metadata(db)
+    sender = CapturingTaskSender()
 
-    prediction = PredictionService(db, predictor_factory=FakePredictor).create_prediction_sync(
+    prediction = PredictionService(db, task_sender=sender).create_prediction_async(
         user.id,
         valid_features(),
     )
 
-    assert prediction.result["prediction"] == 1
-    assert prediction.result["cancellation_probability"] == 0.82
-    assert prediction.result["risk_label"] == "high"
+    assert sender.calls == [(prediction.id, "default")]
 
 
-def test_create_prediction_insufficient_credits_raises(db: Session) -> None:
+def test_create_prediction_async_does_not_call_predictor(db: Session) -> None:
+    user = create_user(db)
+    create_model_metadata(db)
+
+    prediction = PredictionService(
+        db,
+        task_sender=CapturingTaskSender(),
+    ).create_prediction_async(user.id, valid_features())
+
+    assert prediction.status == "pending"
+    assert prediction.result is None
+    assert prediction.completed_at is None
+
+
+def test_create_prediction_async_insufficient_credits_raises(db: Session) -> None:
     user = create_user(db, balance=5)
     create_model_metadata(db)
 
     with pytest.raises(InsufficientCreditsError):
-        PredictionService(db, predictor_factory=FakePredictor).create_prediction_sync(
+        PredictionService(db, task_sender=CapturingTaskSender()).create_prediction_async(
             user.id,
             valid_features(),
         )
 
+    assert db.scalar(select(Prediction).where(Prediction.user_id == user.id)) is None
 
-def test_create_prediction_model_missing_refunds_if_reserved(db: Session) -> None:
+
+def test_create_prediction_async_enqueue_failure_refunds(db: Session) -> None:
     user = create_user(db, balance=100)
     create_model_metadata(db)
-    service = PredictionService(db, predictor_factory=MissingModelPredictor)
 
-    with pytest.raises(ModelNotFoundError):
-        service.create_prediction_sync(user.id, valid_features())
+    with pytest.raises(PredictionEnqueueError):
+        PredictionService(db, task_sender=FailingTaskSender()).create_prediction_async(
+            user.id,
+            valid_features(),
+        )
 
     db.refresh(user)
     prediction = db.scalar(select(Prediction).where(Prediction.user_id == user.id))
@@ -220,55 +244,70 @@ def test_create_prediction_model_missing_refunds_if_reserved(db: Session) -> Non
     assert transaction_types == ["prediction_reserve", "prediction_refund"]
 
 
-def test_create_prediction_predictor_error_refunds(db: Session) -> None:
-    user = create_user(db, balance=100)
+def test_free_active_prediction_limit(db: Session) -> None:
+    user = create_user(db, plan="free")
+    model = create_model_metadata(db)
+    for _ in range(3):
+        create_pending_prediction(db, user, model)
+
+    with pytest.raises(ActivePredictionLimitError):
+        PredictionService(db, task_sender=CapturingTaskSender()).create_prediction_async(
+            user.id,
+            valid_features(),
+        )
+
+
+def test_pro_active_prediction_limit(db: Session) -> None:
+    user = create_user(db, plan="pro")
+    model = create_model_metadata(db)
+    for _ in range(9):
+        create_pending_prediction(db, user, model)
+
+    PredictionService(db, task_sender=CapturingTaskSender()).create_prediction_async(
+        user.id,
+        valid_features(),
+    )
+    with pytest.raises(ActivePredictionLimitError):
+        PredictionService(db, task_sender=CapturingTaskSender()).create_prediction_async(
+            user.id,
+            valid_features(),
+        )
+
+
+def test_queue_selection_free_default(db: Session) -> None:
+    user = create_user(db, plan="free")
     create_model_metadata(db)
-    service = PredictionService(db, predictor_factory=FailingPredictor)
+    sender = CapturingTaskSender()
 
-    with pytest.raises(InvalidFeaturePayloadError):
-        service.create_prediction_sync(user.id, valid_features())
-
-    db.refresh(user)
-    prediction = db.scalar(select(Prediction).where(Prediction.user_id == user.id))
-    assert prediction.status == "failed"
-    assert "Invalid features" in prediction.error_message
-    assert user.balance == 100
-    assert user.reserved_balance == 0
-
-
-def test_get_prediction_only_owner(db: Session) -> None:
-    owner = create_user(db)
-    other_user = create_user(db)
-    create_model_metadata(db)
-    service = PredictionService(db, predictor_factory=FakePredictor)
-    prediction = service.create_prediction_sync(owner.id, valid_features())
-
-    assert service.get_prediction(owner.id, prediction.id).id == prediction.id
-    with pytest.raises(PredictionNotFoundError):
-        service.get_prediction(other_user.id, prediction.id)
-
-
-def test_list_predictions_only_current_user(db: Session) -> None:
-    first_user = create_user(db)
-    second_user = create_user(db)
-    create_model_metadata(db)
-    service = PredictionService(db, predictor_factory=FakePredictor)
-    first_prediction = service.create_prediction_sync(first_user.id, valid_features())
-    service.create_prediction_sync(second_user.id, valid_features())
-
-    predictions = service.list_predictions(first_user.id)
-
-    assert [prediction.id for prediction in predictions] == [first_prediction.id]
-
-
-def test_prediction_cost_is_10_credits(db: Session) -> None:
-    user = create_user(db)
-    create_model_metadata(db)
-
-    prediction = PredictionService(db, predictor_factory=FakePredictor).create_prediction_sync(
+    PredictionService(db, task_sender=sender).create_prediction_async(
         user.id,
         valid_features(),
     )
 
-    assert PREDICTION_COST_CREDITS == 10
-    assert prediction.cost == 10
+    assert sender.calls[0][1] == "default"
+
+
+def test_queue_selection_pro_priority(db: Session) -> None:
+    user = create_user(db, plan="pro")
+    create_model_metadata(db)
+    sender = CapturingTaskSender()
+
+    PredictionService(db, task_sender=sender).create_prediction_async(
+        user.id,
+        valid_features(),
+    )
+
+    assert sender.calls[0][1] == "priority"
+
+
+def test_queue_selection_admin_priority(db: Session) -> None:
+    user = create_user(db, role="admin")
+    create_model_metadata(db)
+    sender = CapturingTaskSender()
+
+    PredictionService(db, task_sender=sender).create_prediction_async(
+        user.id,
+        valid_features(),
+    )
+
+    assert sender.calls[0][1] == "priority"
