@@ -11,3 +11,7 @@ passlib[bcrypt]
 bcrypt<5
 python-jose[cryptography]
 email-validator
+pandas
+numpy
+scikit-learn
+joblib

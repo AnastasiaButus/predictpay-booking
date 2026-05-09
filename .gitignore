@@ -2,6 +2,7 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.pytest_tmp/
 .mypy_cache/
 .ruff_cache/
 .coverage
@@ -22,6 +23,9 @@ data/*
 !data/.gitkeep
 storage/*
 !storage/.gitkeep
+backend/data/*.csv
+backend/storage/models/*.joblib
+backend/storage/models/*_metrics.json
 
 # IDE/editor
 .idea/
