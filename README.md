@@ -183,7 +183,12 @@ remains the source of truth for balances and prediction state.
 The Streamlit dashboard is a Russian-language MVP interface for project demo and
 defense. It is a separate REST API client: it does not connect to PostgreSQL,
 does not call Celery directly, and does not import backend services,
-repositories, or the Predictor.
+repositories, or the Predictor. Categorical prediction feature values are shown
+with Russian labels in the UI, but the dashboard still sends the canonical
+backend feature contract values such as `City Hotel`, `No Deposit`, `Transient`,
+and `Online TA`. User-facing balance and costs are displayed as "билеты банка
+приколов"; backend field names can still use `credits`/`cost_credits`.
+User-facing transaction tables hide technical IDs and show short date/time.
 
 Run:
 
@@ -201,10 +206,13 @@ Demo flow:
 1. Register or log in.
 2. Check account and balance.
 3. Use mock top-up or activate a promocode.
-4. Submit a prediction.
-5. Poll prediction status.
-6. Review prediction history and transactions.
+4. For the secret bonus challenge, paste a URL such as
+   `https://example.com/poincare-proof`.
+5. Submit a prediction.
+6. Poll prediction status.
+7. Review prediction history and transactions.
 
 Promocodes are shown to the user as an MVP demo showcase. In a production
 scenario, promocodes could be targeted, hidden, or distributed through external
-marketing channels instead of being listed openly in the UI.
+marketing channels instead of being listed openly in the UI. `SPRINGFIELD100`
+is a reference to Springfield and The Simpsons.

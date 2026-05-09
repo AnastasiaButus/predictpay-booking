@@ -4,19 +4,23 @@ import streamlit as st
 
 from api_client import APIError, BookingGuardAPIClient
 from localization import (
+    CUSTOMER_TYPE_LABELS,
+    DEPOSIT_TYPE_LABELS,
+    HOTEL_LABELS,
+    MARKET_SEGMENT_LABELS,
+    ADR_HELP_TEXT,
+    SECRET_CHALLENGE_MVP_NOTE,
+    SECRET_CHALLENGE_TEXT,
+    SECRET_CHALLENGE_TITLE,
+    format_funny_tickets,
     localize_prediction_rows,
     localize_promocode_rows,
     localize_transaction_rows,
-    promocode_description,
     translate_error_message,
     translate_risk,
     translate_status,
 )
 
-
-POINCARE_RU = "Всякое замкнутое односвязное трёхмерное многообразие гомеоморфно трёхмерной сфере."
-POINCARE_EN = "Every simply connected, closed 3-manifold is homeomorphic to the 3-sphere."
-POINCARE_MVP_NOTE = "MVP проверяет только формат ссылки; математическая корректность доказательства не проверяется."
 
 PAGE_LABELS = {
     "account": "Аккаунт",
@@ -35,6 +39,7 @@ def main() -> None:
     client = BookingGuardAPIClient()
 
     st.title("PredictPay BookingGuard")
+    st.caption("Сервис оценки риска отмены гостиничного бронирования")
 
     if not is_authenticated():
         render_auth_page(client)
@@ -153,8 +158,8 @@ def render_account_page(client: BookingGuardAPIClient) -> None:
         st.metric("Тариф", user.get("plan", "-"))
     with col2:
         if balance:
-            st.metric("Доступный баланс", balance["balance"])
-            st.metric("Зарезервировано", balance["reserved_balance"])
+            st.metric("Доступный баланс", format_funny_tickets(balance["balance"]))
+            st.metric("Зарезервировано", format_funny_tickets(balance["reserved_balance"]))
         st.metric("Активен", "да" if user.get("is_active") else "нет")
 
 
@@ -163,8 +168,8 @@ def render_billing_page(client: BookingGuardAPIClient) -> None:
     balance = safe_call(lambda: client.get_balance(token()))
     if balance:
         col1, col2 = st.columns(2)
-        col1.metric("Доступный баланс", balance["balance"])
-        col2.metric("Зарезервировано", balance["reserved_balance"])
+        col1.metric("Доступный баланс", format_funny_tickets(balance["balance"]))
+        col2.metric("Зарезервировано", format_funny_tickets(balance["reserved_balance"]))
 
     st.markdown("### Пополнить баланс")
     with st.form("top_up_form"):
@@ -174,9 +179,9 @@ def render_billing_page(client: BookingGuardAPIClient) -> None:
         result = safe_call(lambda: client.top_up(token(), int(amount)))
         if result:
             st.success("Баланс пополнен.")
-            st.metric("Обновлённый баланс", result["balance"])
+            st.metric("Обновлённый баланс", format_funny_tickets(result["balance"]))
 
-    st.markdown("### Последние операции")
+    st.markdown("### Последние операции с билетами банка приколов")
     render_transactions_table(client)
 
 
@@ -199,20 +204,22 @@ def render_promocodes_page(client: BookingGuardAPIClient) -> None:
         result = safe_call(lambda: client.activate_promocode(token(), code))
         if result:
             st.success(f"Промокод активирован: {result['code']}")
-            st.metric("Обновлённый баланс", result["balance"])
+            st.metric("Обновлённый баланс", format_funny_tickets(result["balance"]))
 
-    st.markdown("### POINCARE_CHALLENGE")
-    st.write(POINCARE_RU)
-    st.caption(POINCARE_EN)
-    st.info(POINCARE_MVP_NOTE)
+    st.markdown(f"### {SECRET_CHALLENGE_TITLE}")
+    st.write(SECRET_CHALLENGE_TEXT)
+    st.info(SECRET_CHALLENGE_MVP_NOTE)
     with st.form("poincare_form"):
-        proof_url = st.text_input("Ссылка на доказательство", value="https://example.com/poincare-proof")
-        submitted = st.form_submit_button("Отправить ссылку")
+        proof_url = st.text_input(
+            "Ваш ответ",
+            placeholder="Введите ответ или вставьте ссылку на материал",
+        )
+        submitted = st.form_submit_button("Отправить ответ")
     if submitted:
         result = safe_call(lambda: client.activate_poincare_challenge(token(), proof_url))
         if result:
-            st.success("Бонус POINCARE_CHALLENGE начислен.")
-            st.metric("Обновлённый баланс", result["balance"])
+            st.success("Бонус за секретное задание начислен.")
+            st.metric("Обновлённый баланс", format_funny_tickets(result["balance"]))
 
 
 def render_promocode_showcase(promocodes: list[dict[str, Any]]) -> None:
@@ -223,7 +230,7 @@ def render_promocode_showcase(promocodes: list[dict[str, Any]]) -> None:
             with column:
                 with st.container(border=True):
                     st.markdown(f"#### {item['Код']}")
-                    st.metric("Бонус", f"+{item['Бонус']} credits")
+                    st.metric("Бонус", f"+{item['Бонус']}")
                     st.write(item["Описание"])
 
 
@@ -267,15 +274,25 @@ def render_prediction_form() -> dict[str, Any] | None:
     with st.form("prediction_form"):
         col1, col2 = st.columns(2)
         with col1:
-            hotel = st.selectbox("Тип отеля", ["City Hotel", "Resort Hotel"])
-            deposit_type = st.selectbox("Тип депозита", ["No Deposit", "Non Refund", "Refundable"])
+            hotel = st.selectbox(
+                "Тип отеля",
+                list(HOTEL_LABELS),
+                format_func=lambda value: HOTEL_LABELS.get(value, value),
+            )
+            deposit_type = st.selectbox(
+                "Тип депозита",
+                list(DEPOSIT_TYPE_LABELS),
+                format_func=lambda value: DEPOSIT_TYPE_LABELS.get(value, value),
+            )
             customer_type = st.selectbox(
                 "Тип клиента",
-                ["Transient", "Transient-Party", "Contract", "Group"],
+                list(CUSTOMER_TYPE_LABELS),
+                format_func=lambda value: CUSTOMER_TYPE_LABELS.get(value, value),
             )
             market_segment = st.selectbox(
                 "Канал бронирования",
-                ["Online TA", "Offline TA/TO", "Direct", "Groups", "Corporate", "Complementary", "Aviation"],
+                list(MARKET_SEGMENT_LABELS),
+                format_func=lambda value: MARKET_SEGMENT_LABELS.get(value, value),
             )
         with col2:
             lead_time = st.number_input("Дней до заезда", min_value=0, value=120)
@@ -285,7 +302,14 @@ def render_prediction_form() -> dict[str, Any] | None:
             booking_changes = st.number_input("Изменения бронирования", min_value=0, value=0)
             required_car_parking_spaces = st.number_input("Парковочные места", min_value=0, value=0)
             total_of_special_requests = st.number_input("Особые запросы", min_value=0, value=1)
-            adr = st.number_input("Средняя дневная стоимость номера, ADR", min_value=0.0, value=95.5, step=1.0)
+            adr = st.number_input(
+                "Средняя дневная стоимость номера, ADR",
+                min_value=0.0,
+                value=95.5,
+                step=1.0,
+                help=ADR_HELP_TEXT,
+            )
+            st.caption(ADR_HELP_TEXT)
 
         submitted = st.form_submit_button("Отправить прогноз")
 
@@ -312,7 +336,7 @@ def render_prediction_status_message(result: dict[str, Any]) -> None:
         st.success("Прогноз готов.")
         refresh_balance_note()
     elif result["status"] == "failed":
-        st.error(result.get("error_message") or "Прогноз завершился ошибкой. Credits возвращены.")
+        st.error(result.get("error_message") or "Прогноз завершился ошибкой. Билеты банка приколов возвращены.")
     else:
         st.info("Прогноз ещё в очереди или обрабатывается.")
 
@@ -328,7 +352,7 @@ def render_prediction_result(result: dict[str, Any]) -> None:
     st.markdown("#### Результат прогноза")
     cols = st.columns(3)
     cols[0].metric("Статус", status)
-    cols[1].metric("Стоимость", f"{result.get('cost_credits', '-')} credits")
+    cols[1].metric("Стоимость", format_funny_tickets(result.get("cost_credits")))
     cols[2].metric("Предсказание", prediction if prediction is not None else "-")
 
     if probability is not None:
@@ -360,11 +384,16 @@ def render_prediction_history_page(client: BookingGuardAPIClient) -> None:
         pass
     history = safe_call(lambda: client.get_prediction_history(token()))
     if history:
-        st.dataframe(localize_prediction_rows(history["items"]), use_container_width=True)
+        render_predictions_table(history["items"])
+
+
+def render_predictions_table(predictions: list[dict[str, Any]]) -> None:
+    rows = localize_prediction_rows(predictions)
+    st.dataframe(rows, use_container_width=True, hide_index=True)
 
 
 def render_transactions_page(client: BookingGuardAPIClient) -> None:
-    st.subheader("История операций")
+    st.subheader("История операций с билетами банка приколов")
     if st.button("Обновить операции"):
         pass
     render_transactions_table(client)
@@ -380,7 +409,7 @@ def render_about_page() -> None:
     st.subheader("О проекте / Архитектура")
     st.markdown(
         """
-        PredictPay BookingGuard — учебный production-like ML-сервис для прогноза риска отмены гостиничного бронирования.
+        PredictPay BookingGuard — сервис оценки риска отмены гостиничного бронирования.
 
         - FastAPI backend — REST API.
         - PostgreSQL — источник истины для пользователей, баланса, транзакций и прогнозов.
@@ -401,7 +430,7 @@ def refresh_account(client: BookingGuardAPIClient) -> None:
 
 
 def refresh_balance_note() -> None:
-    st.caption("Обновите страницу баланса, чтобы увидеть актуальное списание credits.")
+    st.caption("Обновите страницу баланса, чтобы увидеть актуальное списание билетов банка приколов.")
 
 
 def safe_call(operation):
