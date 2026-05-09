@@ -1,39 +1,83 @@
 # PredictPay BookingGuard
 
-Educational production-like ML service for predicting hotel booking cancellation risk.
+> **Сервис оценки риска отмены гостиничного бронирования**  
+> Учебный production-like ML-сервис: не просто модель в ноутбуке, а полноценная сервисная обвязка вокруг ML.
 
-Current step: final hardening MVP with FastAPI, PostgreSQL, JWT auth, credit
-billing, Celery/Redis async inference, Streamlit dashboard, Flower, `/metrics`,
-and acceptance documentation.
+PredictPay BookingGuard прогнозирует риск отмены гостиничного бронирования и показывает, как ML-модель можно упаковать в продуктовый сервис: с API, БД, авторизацией, биллингом, асинхронным инференсом, UI, логами, метриками и тестами.
 
-## Final docs
+---
+
+## Что внутри
+
+- **FastAPI backend**: REST API, `/docs`, `/health`, `/metrics`.
+- **PostgreSQL**: source of truth для пользователей, балансов, транзакций, прогнозов, промокодов и refresh-токенов.
+- **SQLAlchemy + Alembic**: ORM-модели и миграции.
+- **JWT auth**: access/refresh flow, refresh-токены хранятся только как SHA-256 hash.
+- **Credit billing**: баланс, резервирование, списание и возврат средств.
+- **Promocodes & easter eggs**: `WELCOME100`, `ANISIMOV100`, `SPRINGFIELD100`, секретное задание.
+- **ML pipeline**: trusted sklearn Pipeline + RandomForestClassifier.
+- **Celery + Redis**: асинхронный inference через worker.
+- **Streamlit dashboard**: русскоязычный пользовательский интерфейс.
+- **Flower**: локальный мониторинг Celery-задач.
+- **Observability**: JSON logs, `X-Request-ID`, Prometheus-compatible `/metrics`.
+- **Tests + coverage gate**: 172 теста, coverage gate `>70%`; последняя проверка показала `92.76%`.
+
+---
+
+## Архитектура
+
+```text
+                    ┌──────────────────────────────┐
+                    │      Streamlit Dashboard      │
+                    │  русскоязычный REST-only UI   │
+                    └──────────────┬───────────────┘
+                                   │ REST + JWT
+                                   ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                        FastAPI Backend                           │
+│ auth │ billing │ promocodes │ predictions │ health │ metrics     │
+└──────────────┬───────────────────────────────┬──────────────────┘
+               │                               │
+               │ SQLAlchemy                    │ Celery task:
+               │                               │ prediction_id only
+               ▼                               ▼
+┌──────────────────────────────┐      ┌───────────────────────────┐
+│          PostgreSQL           │      │       Redis broker         │
+│ source of truth: users,       │      │ queues: default/priority   │
+│ balances, transactions,       │      └──────────────┬────────────┘
+│ predictions, promocodes       │                     │
+└──────────────────────────────┘                     ▼
+                                      ┌───────────────────────────┐
+                                      │       Celery Worker        │
+                                      │ loads trusted sklearn      │
+                                      │ joblib artifact            │
+                                      └──────────────┬────────────┘
+                                                     │
+                                                     ▼
+                                      ┌───────────────────────────┐
+                                      │ storage/models/*.joblib    │
+                                      │ generated locally, ignored │
+                                      │ by git                     │
+                                      └───────────────────────────┘
+
+Дополнительно:
+- Flower: http://localhost:5555
+- Metrics: http://localhost:8000/metrics
+- Logs: structured JSON stdout
+```
+
+---
+
+## Финальные документы
 
 - [Demo script](docs/DEMO_SCRIPT.md)
 - [Architecture](docs/ARCHITECTURE.md)
 
-## Final demo checklist
+---
 
-1. Start the stack, migrate DB, seed demo data, and train the local model.
-2. Open Streamlit, register/log in, show account and balance.
-3. Top up, activate `WELCOME100`, and show the secret challenge.
-4. Submit a prediction and poll it until `completed`.
-5. Show transaction history with reserve and charge records.
-6. Open Flower, `/metrics`, and backend JSON logs.
+## Быстрый запуск через Docker Compose
 
-## Backend
-
-Run from the repository root after installing dependencies:
-
-```bash
-python -m uvicorn app.main:app --app-dir backend --reload
-```
-
-Useful endpoints:
-
-- `GET /health`
-- `GET /docs`
-
-## Local Docker run
+Из корня репозитория:
 
 ```bash
 docker compose build --pull=false
@@ -43,14 +87,65 @@ docker compose exec backend python -m app.seed.seed_demo_data
 docker compose exec backend python -m app.ml.train_model
 ```
 
-- backend: `http://localhost:8000`
-- health: `http://localhost:8000/health`
-- docs: `http://localhost:8000/docs`
-- dashboard: `http://localhost:8501`
-- flower: `http://localhost:5555`
-- metrics: `http://localhost:8000/metrics`
-- postgres: `localhost:5432`
-- redis: `localhost:6379`
+После запуска:
+
+| Сервис | URL |
+|---|---|
+| Backend API | http://localhost:8000 |
+| Healthcheck | http://localhost:8000/health |
+| Swagger / OpenAPI docs | http://localhost:8000/docs |
+| Streamlit dashboard | http://localhost:8501 |
+| Flower | http://localhost:5555 |
+| Metrics | http://localhost:8000/metrics |
+| PostgreSQL | `localhost:5432` |
+| Redis | `localhost:6379` |
+
+Остановить стек:
+
+```bash
+docker compose down
+```
+
+---
+
+## Demo checklist для защиты
+
+```text
+1. Поднять стек через docker compose.
+2. Применить миграции Alembic.
+3. Засеять demo data.
+4. Обучить локальный ML artifact.
+5. Открыть Streamlit dashboard.
+6. Зарегистрироваться / войти.
+7. Показать аккаунт и баланс.
+8. Пополнить баланс или активировать WELCOME100.
+9. Показать секретное задание.
+10. Отправить prediction.
+11. Poll до статуса completed.
+12. Показать историю прогнозов.
+13. Показать историю операций: reserve + charge.
+14. Открыть Flower и показать Celery task.
+15. Открыть /metrics.
+16. Показать backend JSON logs.
+```
+
+---
+
+## Backend local run без Docker
+
+После установки зависимостей:
+
+```bash
+python -m uvicorn app.main:app --app-dir backend --reload
+```
+
+Основные endpoints:
+
+- `GET /health`
+- `GET /docs`
+- `GET /metrics`
+
+---
 
 ## Database and migrations
 
@@ -61,19 +156,29 @@ docker compose exec backend alembic current
 docker compose down
 ```
 
+---
+
 ## Testing
 
-```bash
+```powershell
 .\.venv\Scripts\python.exe -m pytest backend/tests
 .\.venv\Scripts\python.exe -m pytest dashboard/tests
 .\.venv\Scripts\python.exe -m compileall backend/app backend/tests dashboard
 ```
 
+---
+
 ## Coverage check
+
+Формальный coverage gate: команда падает, если покрытие ниже `70%`.
 
 PowerShell:
 
 ```powershell
+$runId = [guid]::NewGuid().ToString("N")
+$pytestTemp = Join-Path $env:TEMP "predictpay_pytest_tmp_$runId"
+$pytestCache = Join-Path $env:TEMP "predictpay_pytest_cache_$runId"
+
 .\.venv\Scripts\python.exe -m pytest backend/tests dashboard/tests `
   --cov=backend/app `
   --cov=dashboard `
@@ -81,25 +186,45 @@ PowerShell:
   --cov-report=term-missing `
   --cov-report=html:htmlcov `
   --cov-fail-under=70 `
-  --basetemp "$env:TEMP\predictpay_pytest_tmp"
+  --basetemp "$pytestTemp" `
+  -o cache_dir="$pytestCache"
 ```
 
-If PowerShell reports temp permission issues, remove stale local pytest folders:
+Последняя локальная проверка:
+
+```text
+172 passed
+TOTAL coverage: 92.76%
+Required test coverage of 70% reached.
+```
+
+Если Windows/PowerShell ругается на старые pytest temp/cache папки:
 
 ```powershell
 Remove-Item -Recurse -Force .pytest_tmp, .pytest_cache -ErrorAction SilentlyContinue
 ```
 
+Generated coverage artifacts (`.coverage`, `htmlcov/`) игнорируются git.
+
+---
+
 ## Auth API
 
-- `POST /api/v1/auth/register`
-- `POST /api/v1/auth/login`
-- `POST /api/v1/auth/refresh`
-- `POST /api/v1/auth/logout`
-- `GET /api/v1/users/me`
+| Method | Endpoint | Что делает |
+|---|---|---|
+| `POST` | `/api/v1/auth/register` | регистрация |
+| `POST` | `/api/v1/auth/login` | login, выдача access/refresh tokens |
+| `POST` | `/api/v1/auth/refresh` | обновление пары токенов |
+| `POST` | `/api/v1/auth/logout` | отзыв refresh token |
+| `GET` | `/api/v1/users/me` | текущий пользователь |
 
-Passwords are stored as hashes. Refresh tokens are stored only as SHA-256 hashes.
-Balance is not stored in JWT tokens.
+Security notes:
+
+- Пароли хранятся только как hash.
+- Refresh-токены хранятся только как SHA-256 hash.
+- Баланс, тариф и другие mutable-поля не кладутся в JWT.
+
+---
 
 ## Seed demo data
 
@@ -107,40 +232,121 @@ Balance is not stored in JWT tokens.
 docker compose up -d
 docker compose exec backend alembic upgrade head
 docker compose exec backend python -m app.seed.seed_demo_data
+```
+
+Проверка seed data:
+
+```bash
 docker compose exec postgres psql -U predictpay -d predictpay -c "select name, version, is_active from ml_models;"
 docker compose exec postgres psql -U predictpay -d predictpay -c "select code, credits_amount, max_activations, current_activations, is_active from promocodes;"
 ```
 
+Seed создаёт:
+
+- metadata модели `hotel_cancellation_model`, version `1.0.0`;
+- demo-промокоды:
+  - `WELCOME100`;
+  - `ANISIMOV100`;
+  - `SPRINGFIELD100`;
+  - `POINCARE_CHALLENGE`.
+
+---
+
 ## Billing API
 
-- `GET /api/v1/billing/balance`
-- `POST /api/v1/billing/top-up`
-- `GET /api/v1/billing/transactions`
+| Method | Endpoint | Что делает |
+|---|---|---|
+| `GET` | `/api/v1/billing/balance` | текущий баланс |
+| `POST` | `/api/v1/billing/top-up` | mock-пополнение |
+| `GET` | `/api/v1/billing/transactions` | история операций |
 
-`balance` is immediately available credit. `reserved_balance` is credit held for
-future prediction lifecycle operations. Top-up creates a completed transaction,
-and the MVP treats the payment gateway as mocked. Reserve, confirm charge, and
-refund are service-level methods for future prediction processing.
+В UI баланс и стоимость показываются как **билеты банка приколов**.
+
+В backend остаётся техническая терминология:
+
+- `balance` — доступные credits;
+- `reserved_balance` — credits, зарезервированные под prediction lifecycle;
+- `transactions` — аудит всех операций.
+
+### Billing lifecycle
+
+```text
+submit prediction
+        │
+        ▼
+reserve 10 tickets
+balance -= 10
+reserved_balance += 10
+        │
+        ├── worker success ──► charge
+        │                      reserved_balance -= 10
+        │                      transaction: prediction_charge amount=0
+        │
+        └── worker failure ──► refund
+                               reserved_balance -= 10
+                               balance += 10
+                               transaction: prediction_refund amount=+10
+```
+
+---
 
 ## Promocodes API
 
-- `GET /api/v1/promocodes`
-- `POST /api/v1/promocodes/activate`
-- `POST /api/v1/promocodes/poincare-challenge`
+| Method | Endpoint | Что делает |
+|---|---|---|
+| `GET` | `/api/v1/promocodes` | активные demo-промокоды |
+| `POST` | `/api/v1/promocodes/activate` | активация обычного промокода |
+| `POST` | `/api/v1/promocodes/poincare-challenge` | секретное задание |
 
-Seeded demo codes: `WELCOME100`, `ANISIMOV100`, `SPRINGFIELD100`, and
-`POINCARE_CHALLENGE`. Activation creates a `promo_bonus` transaction and repeated
-activation by the same user is blocked. The Poincare challenge validates URL
-format only in the MVP; mathematical correctness is not verified.
+Demo codes:
+
+- `WELCOME100` — приветственный бонус.
+- `ANISIMOV100` — пасхалка в честь преподавателя курса.
+- `SPRINGFIELD100` — пасхалка для тех, кто узнал город и стиль аватарки преподавателя.
+- `POINCARE_CHALLENGE` — внутреннее имя секретного задания.
+
+Activation creates `promo_bonus` transaction. Repeated activation by the same user is blocked.
+
+### Секретное задание
+
+В UI пользователь не видит имя `POINCARE_CHALLENGE`.  
+Он видит задание в духе:
+
+> Докажите, что всякое замкнутое односвязное трёхмерное многообразие гомеоморфно трёхмерной сфере.
+
+MVP не проверяет математическую корректность доказательства: backend валидирует только URL-like формат ответа. Это сделано как demo easter egg, а не как настоящий proof checker.
+
+---
 
 ## ML training pipeline
 
-The MVP uses a fixed trusted sklearn model artifact generated by the training
-script. User-uploaded models are not supported. The feature contract has 12
-columns and explicitly excludes leakage columns `reservation_status` and
-`reservation_status_date`.
+MVP использует фиксированный trusted sklearn model artifact, созданный локальным training script. User-uploaded models не поддерживаются.
 
-Local run:
+Feature contract содержит 12 признаков:
+
+```text
+hotel
+lead_time
+adults
+children
+previous_cancellations
+booking_changes
+deposit_type
+customer_type
+market_segment
+required_car_parking_spaces
+total_of_special_requests
+adr
+```
+
+Leakage columns исключены из обучения и rejected на inference:
+
+```text
+reservation_status
+reservation_status_date
+```
+
+### Local training
 
 ```bash
 cd backend
@@ -148,7 +354,7 @@ cd backend
 cd ..
 ```
 
-Docker run:
+### Docker training
 
 ```bash
 docker compose build backend
@@ -156,28 +362,36 @@ docker compose up -d
 docker compose exec backend python -m app.ml.train_model
 ```
 
-You may place `data/hotel_bookings.csv` locally before training. If it is absent,
-the script uses a small synthetic demo dataset. Synthetic fallback exists only
-for demo reproducibility; metrics from that fallback are smoke-check metrics and
-must not be interpreted as real model quality.
+Можно положить реальный датасет локально:
 
-To train on real data:
+```text
+backend/data/hotel_bookings.csv
+```
 
-1. Download the Hotel Booking Demand dataset from Kaggle manually.
-2. Put `hotel_bookings.csv` into `backend/data/hotel_bookings.csv` when running
-   from `backend`.
-3. Run `python -m app.ml.train_model`.
-4. Check `storage/models/hotel_cancellation_model_metrics.json`.
+Если файла нет, training script использует маленький synthetic fallback dataset. Это нужно только для воспроизводимого demo smoke. Метрики на synthetic fallback нельзя интерпретировать как качество модели.
 
-Generated `joblib` and metrics JSON artifacts are ignored by git.
+Для обучения на реальных данных:
+
+1. Скачать Hotel Booking Demand dataset с Kaggle вручную.
+2. Положить `hotel_bookings.csv` в `backend/data/hotel_bookings.csv`.
+3. Запустить `python -m app.ml.train_model` из папки `backend`.
+4. Проверить `storage/models/hotel_cancellation_model_metrics.json`.
+
+Generated `joblib`, metrics JSON и CSV игнорируются git.
+
+---
 
 ## Predictor
 
-`HotelCancellationPredictor` loads the trusted local joblib artifact from
-`storage/models/hotel_cancellation_model.joblib`. Joblib files must be trusted
-local artifacts only; user-uploaded models are not supported in the MVP.
+`HotelCancellationPredictor` загружает trusted local joblib artifact:
 
-Create the artifact first:
+```text
+storage/models/hotel_cancellation_model.joblib
+```
+
+Joblib artifacts должны быть только локальными trusted artifacts. User-uploaded joblib files в MVP не поддерживаются.
+
+Создать artifact:
 
 ```bash
 cd backend
@@ -185,62 +399,113 @@ cd backend
 cd ..
 ```
 
-The Predictor validates the fixed 12-feature contract, rejects leakage columns
-such as `reservation_status` and `reservation_status_date`, and returns a
-structured result with prediction, cancellation probability, risk label, model
-name/version, and the feature list used. Future prediction API and Celery workers
-will use this Predictor.
+Predictor:
+
+- валидирует 12-feature contract;
+- rejected extra fields;
+- rejected leakage columns;
+- приводит numeric fields к числам;
+- возвращает structured result:
+  - `prediction`;
+  - `cancellation_probability`;
+  - `risk_label`;
+  - `model_name`;
+  - `model_version`;
+  - `features_used`.
+
+Risk labels:
+
+```text
+low    probability < 0.35
+medium 0.35 <= probability < 0.65
+high   probability >= 0.65
+```
+
+---
 
 ## Prediction API
 
-- `POST /api/v1/predictions`
-- `GET /api/v1/predictions/{id}`
-- `GET /api/v1/predictions/history`
+| Method | Endpoint | Что делает |
+|---|---|---|
+| `POST` | `/api/v1/predictions` | создать async prediction task |
+| `GET` | `/api/v1/predictions/{id}` | получить статус/результат |
+| `GET` | `/api/v1/predictions/history` | история прогнозов пользователя |
 
-Prediction cost is 10 credits. In Task 13 inference runs asynchronously through
-Celery. `POST /api/v1/predictions` creates the DB record, reserves credits, and
-returns `pending` quickly. Use `GET /api/v1/predictions/{id}` or
-`GET /api/v1/predictions/history` to poll DB status.
+Стоимость одного прогноза:
 
-Active prediction limits are enforced before the prediction row is created and
-before credits are reserved. Active statuses are `pending` and `processing`.
-Free users can have up to 3 active predictions; pro users and admins can have up
-to 10. When the limit is reached, the API returns `409 Conflict` and leaves
-balance/reserved credits unchanged.
-
-Before using the Prediction API:
-
-```bash
-docker compose up -d
-docker compose exec backend alembic upgrade head
-docker compose exec backend python -m app.seed.seed_demo_data
-docker compose exec backend python -m app.ml.train_model
-docker compose logs celery_worker --tail=100
+```text
+10 билетов банка приколов
 ```
 
-Billing lifecycle:
+Prediction lifecycle:
 
-- submit reserves 10 credits from `balance` into `reserved_balance`;
-- worker success confirms charge with a zero-amount `prediction_charge`;
-- worker failure refunds reserved credits back to `balance`.
+```text
+POST /api/v1/predictions
+        │
+        ├─ validate 12 features
+        ├─ check active prediction limit
+        ├─ create pending prediction
+        ├─ reserve 10 credits
+        ├─ enqueue Celery task
+        ▼
+GET /api/v1/predictions/{id}
+        │
+        ├─ pending
+        ├─ processing
+        ├─ completed
+        └─ failed
+```
 
-Queue selection is plan-aware: free users go to `default`; pro users and admins
-go to `priority`. Redis is used only as Celery broker/result backend; PostgreSQL
-remains the source of truth for balances and prediction state.
+Active prediction limits:
+
+| User type | Active predictions |
+|---|---:|
+| free | 3 |
+| pro | 10 |
+| admin | 10 |
+
+Active statuses:
+
+```text
+pending
+processing
+```
+
+Если лимит достигнут, API возвращает `409 Conflict`; prediction row не создаётся, credits не резервируются.
+
+Queue selection:
+
+| User type | Queue |
+|---|---|
+| free | `default` |
+| pro/admin | `priority` |
+
+Redis используется только как Celery broker/result backend. PostgreSQL остаётся source of truth для баланса и статуса prediction.
+
+---
 
 ## Dashboard
 
-The Streamlit dashboard is a Russian-language MVP interface for project demo and
-defense. It is a separate REST API client: it does not connect to PostgreSQL,
-does not call Celery directly, and does not import backend services,
-repositories, or the Predictor. Categorical prediction feature values are shown
-with Russian labels in the UI, but the dashboard still sends the canonical
-backend feature contract values such as `City Hotel`, `No Deposit`, `Transient`,
-and `Online TA`. User-facing balance and costs are displayed as "билеты банка
-приколов"; backend field names can still use `credits`/`cost_credits`.
-User-facing transaction tables hide technical IDs and show short date/time.
+Streamlit dashboard — русскоязычный MVP-интерфейс для demo и защиты.
 
-Run:
+Важно:
+
+- Dashboard ходит в backend только через REST API.
+- Dashboard не подключается напрямую к PostgreSQL.
+- Dashboard не вызывает Celery напрямую.
+- Dashboard не импортирует backend repositories/services/Predictor.
+- JWT хранится в `st.session_state`.
+- Технические ID скрыты из пользовательских таблиц.
+- Даты в UI показываются в коротком формате.
+- Баланс и стоимости показываются как **билеты банка приколов**.
+- Categorical feature values отображаются по-русски, но в backend отправляются canonical values:
+  - `City Hotel`;
+  - `No Deposit`;
+  - `Transient`;
+  - `Online TA`;
+  - и т.д.
+
+Запуск:
 
 ```bash
 docker compose up -d
@@ -249,32 +514,37 @@ docker compose exec backend python -m app.seed.seed_demo_data
 docker compose exec backend python -m app.ml.train_model
 ```
 
-Open `http://localhost:8501`.
+Открыть:
+
+```text
+http://localhost:8501
+```
 
 Demo flow:
 
-1. Register or log in.
-2. Check account and balance.
-3. Use mock top-up or activate a promocode.
-4. For the secret bonus challenge, paste a URL such as
-   `https://example.com/poincare-proof`.
-5. Submit a prediction.
-6. Poll prediction status.
-7. Review prediction history and transactions.
+1. Register / log in.
+2. Проверить аккаунт и баланс.
+3. Пополнить баланс или активировать промокод.
+4. Открыть секретное задание.
+5. Отправить prediction.
+6. Poll до `completed`.
+7. Посмотреть историю прогнозов.
+8. Посмотреть операции с билетами банка приколов.
 
-Promocodes are shown to the user as an MVP demo showcase. In a production
-scenario, promocodes could be targeted, hidden, or distributed through external
-marketing channels instead of being listed openly in the UI. `SPRINGFIELD100`
-is a reference to Springfield and The Simpsons.
+Promocodes в UI показаны как MVP demo showcase. В production-сценарии промокоды могли бы быть таргетированными, скрытыми или раздаваться через внешние marketing channels.
+
+---
 
 ## Observability / Ops
 
 Local ops URLs:
 
-- Backend docs: `http://localhost:8000/docs`
-- Metrics: `http://localhost:8000/metrics`
-- Dashboard: `http://localhost:8501`
-- Flower: `http://localhost:5555`
+| Что | URL |
+|---|---|
+| Backend docs | http://localhost:8000/docs |
+| Metrics | http://localhost:8000/metrics |
+| Dashboard | http://localhost:8501 |
+| Flower | http://localhost:5555 |
 
 Useful commands:
 
@@ -284,19 +554,83 @@ docker compose ps
 docker compose logs backend --tail=100
 docker compose logs celery_worker --tail=100
 docker compose logs flower --tail=100
+```
+
+PowerShell smoke:
+
+```powershell
 Invoke-RestMethod http://127.0.0.1:8000/health
 Invoke-RestMethod http://127.0.0.1:8000/metrics
 ```
 
-Backend logs are structured JSON logs written to stdout. HTTP request logs include
-method, path template, status code, duration, client host, and `request_id`.
-If a request includes `X-Request-ID`, the backend preserves it; otherwise it
-generates one and returns it in response headers. Request bodies, passwords,
-JWTs, refresh tokens, and Authorization headers are intentionally not logged.
+### JSON logs
 
-`/metrics` exposes Prometheus-compatible text metrics for HTTP requests,
-request duration, queued prediction submissions, and application info. Celery
-worker monitoring is handled by Flower at `http://localhost:5555`.
+Backend logs are structured JSON logs written to stdout.
 
-Security note: Flower runs without authentication in this MVP and is intended
-for local/demo mode only.
+HTTP request logs include:
+
+- method;
+- path template;
+- status code;
+- duration;
+- client host;
+- `request_id`.
+
+If request includes `X-Request-ID`, backend preserves it. Otherwise it generates one and returns it in response headers.
+
+Sensitive data is intentionally not logged:
+
+- request bodies;
+- passwords;
+- JWT;
+- refresh tokens;
+- `Authorization` headers.
+
+### Metrics
+
+`/metrics` exposes Prometheus-compatible text metrics:
+
+- HTTP request count;
+- HTTP request duration;
+- queued prediction submissions;
+- app info.
+
+Metrics не содержат user/email/user_id labels.
+
+### Flower
+
+Flower доступен локально:
+
+```text
+http://localhost:5555
+```
+
+Flower показывает Celery workers и tasks.
+
+Security note: Flower runs without authentication in this MVP and is intended for local/demo mode only.
+
+---
+
+## Что не входит в MVP
+
+Осознанные ограничения:
+
+- Нет user-uploaded models.
+- Нет real payment gateway.
+- Нет S3/MinIO для model registry.
+- Нет Grafana dashboard.
+- Нет production-grade distributed transaction между DB и broker.
+- Flower без auth — только local/demo.
+- Synthetic dataset fallback — только smoke-check, не показатель качества модели.
+
+---
+
+## Future improvements
+
+- Grafana dashboard поверх `/metrics`.
+- S3/MinIO или model registry для хранения model artifacts.
+- Outbox pattern или recovery job для зависших `pending/processing` predictions.
+- Real payment integration.
+- Admin UI для управления пользователями, промокодами и моделями.
+- CI/CD pipeline.
+- Production auth для Flower/ops endpoints.
