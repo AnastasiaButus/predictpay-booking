@@ -69,6 +69,27 @@ docker compose down
 .\.venv\Scripts\python.exe -m compileall backend/app backend/tests dashboard
 ```
 
+## Coverage check
+
+PowerShell:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest backend/tests dashboard/tests `
+  --cov=backend/app `
+  --cov=dashboard `
+  --cov-config=.coveragerc `
+  --cov-report=term-missing `
+  --cov-report=html:htmlcov `
+  --cov-fail-under=70 `
+  --basetemp "$env:TEMP\predictpay_pytest_tmp"
+```
+
+If PowerShell reports temp permission issues, remove stale local pytest folders:
+
+```powershell
+Remove-Item -Recurse -Force .pytest_tmp, .pytest_cache -ErrorAction SilentlyContinue
+```
+
 ## Auth API
 
 - `POST /api/v1/auth/register`

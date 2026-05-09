@@ -1,0 +1,13 @@
+[run]
+omit =
+    */tests/*
+    */__init__.py
+    backend/alembic/*
+    backend/app/seed/*
+    backend/app/ml/train_model.py
+    dashboard/app.py
+
+[report]
+show_missing = True
+skip_covered = True
+precision = 2
