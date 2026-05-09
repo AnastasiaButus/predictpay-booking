@@ -77,3 +77,14 @@ docker compose exec postgres psql -U predictpay -d predictpay -c "select code, c
 future prediction lifecycle operations. Top-up creates a completed transaction,
 and the MVP treats the payment gateway as mocked. Reserve, confirm charge, and
 refund are service-level methods for future prediction processing.
+
+## Promocodes API
+
+- `GET /api/v1/promocodes`
+- `POST /api/v1/promocodes/activate`
+- `POST /api/v1/promocodes/poincare-challenge`
+
+Seeded demo codes: `WELCOME100`, `ANISIMOV100`, `SPRINGFIELD100`, and
+`POINCARE_CHALLENGE`. Activation creates a `promo_bonus` transaction and repeated
+activation by the same user is blocked. The Poincare challenge validates URL
+format only in the MVP; mathematical correctness is not verified.

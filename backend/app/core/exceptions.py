@@ -8,3 +8,27 @@ class BillingConsistencyError(Exception):
 
 class DuplicateBillingOperationError(Exception):
     pass
+
+
+class PromocodeNotFoundError(Exception):
+    pass
+
+
+class PromocodeInactiveError(Exception):
+    pass
+
+
+class PromocodeExpiredError(Exception):
+    pass
+
+
+class PromocodeActivationLimitError(Exception):
+    pass
+
+
+class PromocodeAlreadyActivatedError(Exception):
+    pass
+
+
+class InvalidChallengeSubmissionError(Exception):
+    pass
