@@ -126,3 +126,23 @@ To train on real data:
 4. Check `storage/models/hotel_cancellation_model_metrics.json`.
 
 Generated `joblib` and metrics JSON artifacts are ignored by git.
+
+## Predictor
+
+`HotelCancellationPredictor` loads the trusted local joblib artifact from
+`storage/models/hotel_cancellation_model.joblib`. Joblib files must be trusted
+local artifacts only; user-uploaded models are not supported in the MVP.
+
+Create the artifact first:
+
+```bash
+cd backend
+..\.venv\Scripts\python.exe -m app.ml.train_model --data-path data/hotel_bookings.csv
+cd ..
+```
+
+The Predictor validates the fixed 12-feature contract, rejects leakage columns
+such as `reservation_status` and `reservation_status_date`, and returns a
+structured result with prediction, cancellation probability, risk label, model
+name/version, and the feature list used. Future prediction API and Celery workers
+will use this Predictor.

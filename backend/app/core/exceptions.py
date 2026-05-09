@@ -32,3 +32,15 @@ class PromocodeAlreadyActivatedError(Exception):
 
 class InvalidChallengeSubmissionError(Exception):
     pass
+
+
+class ModelNotFoundError(Exception):
+    pass
+
+
+class ModelLoadError(Exception):
+    pass
+
+
+class InvalidFeaturePayloadError(Exception):
+    pass
