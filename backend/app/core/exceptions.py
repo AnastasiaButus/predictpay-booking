@@ -44,3 +44,11 @@ class ModelLoadError(Exception):
 
 class InvalidFeaturePayloadError(Exception):
     pass
+
+
+class ModelMetadataNotFoundError(Exception):
+    pass
+
+
+class PredictionNotFoundError(Exception):
+    pass

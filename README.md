@@ -146,3 +146,28 @@ such as `reservation_status` and `reservation_status_date`, and returns a
 structured result with prediction, cancellation probability, risk label, model
 name/version, and the feature list used. Future prediction API and Celery workers
 will use this Predictor.
+
+## Prediction API
+
+- `POST /api/v1/predictions`
+- `GET /api/v1/predictions/{id}`
+- `GET /api/v1/predictions/history`
+
+Prediction cost is 10 credits. In Task 12 inference is synchronous: the API
+creates the DB record, reserves credits, runs `HotelCancellationPredictor`, then
+confirms charge on success or refunds on failure. Celery async queue execution
+is a future task.
+
+Before using the Prediction API:
+
+```bash
+docker compose up -d
+docker compose exec backend alembic upgrade head
+docker compose exec backend python -m app.seed.seed_demo_data
+docker compose exec backend python -m app.ml.train_model
+```
+
+Reserve moves 10 credits from `balance` to `reserved_balance`. Charge confirms
+the reserved credits with a zero-amount `prediction_charge` transaction because
+the balance was already reduced during reserve. Refund returns reserved credits
+to `balance` if inference fails.
